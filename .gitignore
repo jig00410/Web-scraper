@@ -1,0 +1,65 @@
+# =========================
+# Environment & Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Python Virtual Environments
+# =========================
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Python Bytecode & Caches
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Build & Packaging Artifacts
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# =========================
+# Test, Coverage & Tool Caches
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# =========================
+# IDE & Editor Settings
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Logs & Runtime Files
+# =========================
+*.log
+*.pid
+
+# =========================
+# Local Database Files
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# OS-generated Files
+# =========================
+.DS_Store
+Thumbs.db
