@@ -63,3 +63,6 @@ htmlcov/
 # =========================
 .DS_Store
 Thumbs.db
+
+# Firebase credentials
+config/serviceAccountKey.json

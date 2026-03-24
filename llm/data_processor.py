@@ -1,5 +1,5 @@
 import json
-from llm.gemini_client import call_llm_api
+from llm.groq_client import call_llm_api
 
 
 def process_extracted_data(query, extracted_data):
