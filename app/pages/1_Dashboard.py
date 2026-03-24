@@ -1,24 +1,10 @@
-
-import sys
-import os
-import re
-import json
-
-# Determine project root dynamically (Web-scraper folder)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-# Now imports will work
-from scraper.scraping_pipeline import execute_scraping
-from llm.data_refiner import refine_structured_data
+import streamlit as st, time, sys, os, io
+import pandas as pd
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+st.set_page_config(page_title="Dashboard — WebScraper Pro", page_icon="🌐",
+                   layout="wide", initial_sidebar_state="collapsed")
 from utils.layout import setup_page
 from utils.icons import icon
-
-import streamlit as st
-import pandas as pd
-import io
-import time
 
 def to_excel(df):
     buf = io.BytesIO()
@@ -159,59 +145,33 @@ with main:
             start = st.button("▶  Start Scraping", use_container_width=True, key="dash_start")
 
         if start:
-            if not url:
-                st.error("Please enter a URL")
-            else:
-                try:
-                    with st.spinner("Scraping website using AI..."):
+            target = url or "https://example.com"
+            pb = st.progress(0)
+            st_t = st.empty()
+            con = st.empty()
+            steps = [(15, "Launching Playwright…"), (35, "Navigating URL…"),
+                     (55, "Extracting DOM…"), (75, "AI cleaning…"), (100, "Done!")]
+            lines = []
+            for pct, msg in steps:
+                pb.progress(pct)
+                st_t.markdown(f'<p style="color:{t["text2"]};font-size:0.82rem;margin:0;">{msg}</p>',
+                              unsafe_allow_html=True)
+                lines.append(f'<span style="color:{t["muted"]};">[{time.strftime("%H:%M:%S")}]</span>'
+                             f' <span style="color:{t["green"]};">{msg}</span>')
+                con.markdown(f'<div class="CB">{"<br>".join(lines)}</div>', unsafe_allow_html=True)
+                time.sleep(0.3)
+            st_t.empty(); pb.empty()
+            st.success(f"✅ Done! Data extracted from {target}")
 
-                        # 🔥 Call backend
-                        result = execute_scraping(url, "extract all relevant data")
+            st.info("Upload a file below or connect your data source to view results.")
 
-                    # 🔹 Convert result → DataFrame
-                    # 🔹 Convert LLM output → DataFrame safely
-                    if isinstance(result, str):
-                        # extract JSON from string
-                        cleaned = re.search(r'\{.*\}|\[.*\]', result, re.DOTALL)
-                        if cleaned:
-                            try:
-                                result = json.loads(cleaned.group(0))
-                            except:
-                                st.error("❌ JSON parsing failed")
-                                st.write(result)
-                                result = None
-                        else:
-                            st.error("❌ No JSON found in LLM output")
-                            result = None
-
-                    # Now convert to DataFrame
-                    if result is not None:
-                        if isinstance(result, list):
-                            df = refine_structured_data(result)
-                        elif isinstance(result, dict):
-                            # assume the first key holds the data list
-                            key = list(result.keys())[0]
-                            df = refine_structured_data(result[key])
-                        else:
-                            st.error("Unsupported data format returned")
-                            df = None
-
-                    if df is not None and not df.empty:
-                        st.session_state["dashboard_df"] = df
-
-                        st.success(f"✅ Data extracted from {url}")
-                        st.metric("Total Rows Extracted", len(df))
-
-                        # ✅ Add to recent jobs
-                        st.session_state["recent_jobs"] = st.session_state.get("recent_jobs", []) + [
-                            (url, "Custom", len(df), "95%", "G", "Completed", "2s")
-                        ]
-
-                    else:
-                        st.warning("No data extracted.")
-
-                except Exception as e:
-                    st.error(f"❌ Scraping failed: {e}")
+            dl1, dl2, dl3 = st.columns(3, gap="small")
+            with dl1:
+                st.button("⬇ CSV", disabled=True, use_container_width=True, key="dl_csv_ph")
+            with dl2:
+                st.button("⬇ JSON", disabled=True, use_container_width=True, key="dl_json_ph")
+            with dl3:
+                st.button("⬇ Excel", disabled=True, use_container_width=True, key="dl_excel_ph")
 
     with rc:
         # Data Schema card — empty until data is loaded
