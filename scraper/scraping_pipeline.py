@@ -3,13 +3,11 @@ from scraper.page_loader import load_page
 from scraper.html_processor import process_html
 from scraper.tag_tree_builder import build_tag_tree
 from scraper.content_extractor import extract_content_by_tags
-from scraper.tag_tree_optimizer import optimize_tag_tree
 from scraper.url_validator import validate_url
 
 # LLM functions (import from llm/)
 from llm.tag_selector import select_relevant_tags
 from llm.data_processor import process_extracted_data
-from llm.data_refiner import refine_structured_data
 
 
 def execute_scraping(url, query):
@@ -28,20 +26,14 @@ def execute_scraping(url, query):
         # Step 3: Build tag tree
         tag_tree = build_tag_tree(soup)
 
-        # Step 4: Optimize tag tree
-        optimized_tree = optimize_tag_tree(tag_tree)
+        # Step 4: Send to LLM → get relevant tags
+        selected_tags = select_relevant_tags(query, tag_tree)
 
-        # Step 5: Send optimized tree to LLM
-        selected_tags = select_relevant_tags(query, optimized_tree)
+        # Step 5: Extract content using filtered tags
+        extracted_data = extract_content_by_tags(soup, selected_tags)
 
-        # Step 6: Extract content
-        extracted_data = extract_content_by_tags(optimized_tree, selected_tags)
-
-        # Step 7: First LLM pass (structure data)
-        structured_data = process_extracted_data(query, extracted_data)
-
-        # ✅ Step 8: Refine / clean / normalize output
-        final_output = refine_structured_data(query, structured_data)
+        # Step 6: Send back to LLM for formatting
+        final_output = process_extracted_data(query, extracted_data)
 
         return final_output
 

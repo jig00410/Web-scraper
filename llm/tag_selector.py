@@ -10,7 +10,7 @@ User Query:
 {query}
 
 Tag Tree (JSON):
-{json.dumps(tag_tree)[:100000]} Truncate if too long
+{json.dumps(tag_tree)[:15000]}
 
 Task:
 - Identify ONLY the most relevant tags for extracting the requested data
@@ -20,7 +20,7 @@ Task:
   {{"tag": "span", "attrs": {{"id": "title"}}}}
 ]
 
-STRICT: Return ONLY JSON. Full explaination of Data.
+STRICT: Return ONLY JSON. No explanation.
 """
 
     response_text = call_llm_api(prompt)
