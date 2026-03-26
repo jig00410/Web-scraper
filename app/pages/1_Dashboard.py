@@ -1,15 +1,6 @@
 import streamlit as st, time, sys, os, io
 import pandas as pd
-import json
-
-_here = os.path.dirname(os.path.abspath(__file__))
-_app  = os.path.dirname(_here)
-_root = os.path.dirname(_app)
-if _root not in sys.path:
-    sys.path.insert(0, _root)
-if _app not in sys.path:
-    sys.path.insert(0, _app)
-
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 st.set_page_config(page_title="Dashboard — WebScraper Pro", page_icon="🌐",
                    layout="wide", initial_sidebar_state="collapsed")
 from utils.layout import setup_page
@@ -18,6 +9,7 @@ from scraper.browser_manager import launch_browser, close_browser
 from scraper.page_loader import load_page
 from scraper.html_processor import process_html
 from scraper.tag_tree_builder import build_tag_tree
+from scraper.tag_tree_optimizer import optimize_tag_tree
 from scraper.content_extractor import extract_content_by_tags
 from scraper.url_validator import validate_url
 from llm.tag_selector import select_relevant_tags
@@ -170,6 +162,7 @@ with main:
         with uc:
             url = st.text_input("URL", placeholder="Enter Website URL to Scrape",
                                 label_visibility="collapsed", key="dash_url")
+            query = st.text_area("❓ Enter Query (What do you want to extract?)")
         with cc:
             st.selectbox("Category", ["E-commerce", "News Articles", "Job Listings", "Custom"],
                          label_visibility="collapsed", key="dash_cat")
@@ -191,76 +184,75 @@ with main:
         if start:
             if not url:
                 st.warning("⚠️ Please enter a URL first!")
-            elif not query:
-                st.warning("⚠️ Please enter what you want to extract!")
-            else:
-                pb   = st.progress(0)
-                st_t = st.empty()
-                con  = st.empty()
-                lines = []
+                st.stop()
 
-                def log(msg, pct):
-                    pb.progress(pct)
-                    st_t.markdown(
-                        f'<p style="color:{t["text2"]};font-size:0.82rem;margin:0;">{msg}</p>',
-                        unsafe_allow_html=True)
-                    lines.append(
-                        f'<span style="color:{t["muted"]};">[{time.strftime("%H:%M:%S")}]</span>'
-                        f' <span style="color:{t["green"]};">{msg}</span>')
-                    con.markdown(
-                        f'<div class="CB">{"<br>".join(lines)}</div>',
-                        unsafe_allow_html=True)
+    # Query input
+    query = st.text_input("What do you want to extract?",
+                          placeholder="e.g. Get all product names and prices",
+                          key="dash_query")
 
-                try:
-                    log("🔍 Validating URL...", 10)
-                    if not validate_url(url):
-                        st.error("❌ Invalid or unreachable URL!")
-                        st.stop()
+    if not query:
+        st.info("👆 Enter what you want to extract, then click Start Scraping again.")
+        st.stop()
 
-                    log("🚀 Launching Playwright browser...", 20)
-                    playwright, browser = launch_browser()
+    pb  = st.progress(0)
+    st_t = st.empty()
+    con  = st.empty()
+    lines = []
 
-                    try:
-                        log("🌐 Loading page...", 35)
-                        raw_html = load_page(browser, url)
+    def log(msg, pct):
+        pb.progress(pct)
+        st_t.markdown(f'<p style="color:{t["text2"]};font-size:0.82rem;margin:0;">{msg}</p>',
+                      unsafe_allow_html=True)
+        lines.append(f'<span style="color:{t["muted"]};">[{time.strftime("%H:%M:%S")}]</span>'
+                     f' <span style="color:{t["green"]};">{msg}</span>')
+        con.markdown(f'<div class="CB">{"<br>".join(lines)}</div>', unsafe_allow_html=True)
 
-                        log("🧹 Cleaning HTML...", 50)
-                        soup = process_html(raw_html)
+    try:
+        # Step 1: Validate URL
+        log("🔍 Validating URL...", 10)
+        is_valid = validate_url(url)
+        if not is_valid:
+            st.error("❌ Invalid or unreachable URL!")
+            st.stop()
 
-                        log("🌳 Building tag tree...", 60)
-                        tag_tree = build_tag_tree(soup)
+        # Step 2: Launch browser
+        log("🚀 Launching Playwright browser...", 20)
+        playwright, browser = launch_browser()
 
-                        log("🤖 AI selecting relevant tags...", 72)
-                        selected_tags = select_relevant_tags(query, tag_tree)
+        try:
+            # Step 3: Load page
+            log("🌐 Loading page...", 35)
+            raw_html = load_page(browser, url)
 
-                        log("📦 Extracting content...", 85)
-                        extracted_data = extract_content_by_tags(soup, selected_tags)
+            # Step 4: Process HTML
+            log("🧹 Cleaning HTML...", 50)
+            soup = process_html(raw_html)
 
-                        log("✨ AI processing final output...", 95)
-                        final_output = process_extracted_data(query, extracted_data)
+            # Step 5: Build tag tree
+            log("🌳 Building tag tree...", 60)
+            tag_tree = build_tag_tree(soup)
+            tag_tree = optimize_tag_tree(tag_tree)
 
-                        log("✅ Done!", 100)
-                        pb.empty()
-                        st_t.empty()
-                        con.empty()
+            # Step 6: LLM tag selection
+            log("🤖 AI selecting relevant tags...", 72)
+            selected_tags = select_relevant_tags(query, tag_tree)
 
-                        # Save to session — NO rerun so data stays visible
-                        if isinstance(extracted_data, list) and len(extracted_data) > 0:
-                            raw_df = pd.DataFrame(extracted_data)
-                            df = clean_dataframe(raw_df)
-                            st.session_state["dashboard_df"] = df
-                            st.session_state["scrape_result_text"] = str(final_output)
+            # Step 7: Extract content
+            log("📦 Extracting content...", 85)
+            extracted_data = extract_content_by_tags(soup, selected_tags)
 
-                    finally:
-                        close_browser(playwright, browser)
+            # Step 8: Final LLM processing
+            log("✨ AI processing final output...", 95)
+            final_output = process_extracted_data(query, extracted_data)
 
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+            log("✅ Done!", 100)
+            pb.empty()
+            st_t.empty()
 
-        # Show scraping result — persists after rerun
-        if st.session_state.get("scrape_result_text"):
-            result_df = st.session_state["dashboard_df"]
-            st.success(f"✅ Scraping complete! {len(result_df)} rows extracted.")
+            st.success(f"✅ Scraping complete! Extracted {len(extracted_data)} items.")
+
+            # Show final output
             st.markdown("### 📊 Extracted Data")
             st.write(st.session_state["scrape_result_text"])
 
