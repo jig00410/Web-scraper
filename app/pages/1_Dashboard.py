@@ -1,7 +1,7 @@
 import streamlit as st, time, sys, os, io
 import pandas as pd
+import json
 
-# ── Path Fix ──────────────────────────────────────────────
 _here = os.path.dirname(os.path.abspath(__file__))
 _app  = os.path.dirname(_here)
 _root = os.path.dirname(_app)
@@ -9,7 +9,6 @@ if _root not in sys.path:
     sys.path.insert(0, _root)
 if _app not in sys.path:
     sys.path.insert(0, _app)
-# ──────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Dashboard — WebScraper Pro", page_icon="🌐",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -24,13 +23,26 @@ from scraper.url_validator import validate_url
 from llm.tag_selector import select_relevant_tags
 from llm.data_processor import process_extracted_data
 
+
 def to_excel(df):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="Data")
     return buf.getvalue()
 
-def gen_ai_analysis(df):
+
+def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(
+                lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
+            )
+    return df
+
+
+def gen_ai_analysis(df: pd.DataFrame) -> str:
+    df = clean_dataframe(df)
     n_rows, n_cols = df.shape
     lines = [
         "Dataset Overview", "================",
@@ -39,27 +51,45 @@ def gen_ai_analysis(df):
         "Column Summaries", "----------------",
     ]
     for col in df.columns:
-        if pd.api.types.is_numeric_dtype(df[col]):
-            lines.append(f"{col}: min={df[col].min():.2f}, max={df[col].max():.2f}, mean={df[col].mean():.2f}, nulls={df[col].isna().sum()}")
-        else:
-            top = df[col].value_counts().head(3).index.tolist()
-            lines.append(f"{col}: {df[col].nunique()} unique. Top: {', '.join(str(v) for v in top)}. Nulls: {df[col].isna().sum()}")
+        try:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                lines.append(
+                    f"{col}: min={df[col].min():.2f}, max={df[col].max():.2f}, "
+                    f"mean={df[col].mean():.2f}, nulls={df[col].isna().sum()}"
+                )
+            else:
+                safe_col = df[col].astype(str)
+                top = safe_col.value_counts().head(3).index.tolist()
+                lines.append(
+                    f"{col}: {safe_col.nunique()} unique. "
+                    f"Top: {', '.join(str(v) for v in top)}. "
+                    f"Nulls: {df[col].isna().sum()}"
+                )
+        except Exception:
+            lines.append(f"{col}: (could not summarise)")
     lines += [
         "", "Recommendations", "---------------",
         f"* {n_rows} rows — {'sufficient' if n_rows > 50 else 'small dataset, consider collecting more'}.",
         f"* {sum(1 for c in df.columns if df[c].isna().any())} columns contain nulls.",
-        f"* Numeric cols for charting: {', '.join(c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])) or 'none detected'}.",
+        f"* Numeric cols for charting: "
+        f"{', '.join(c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])) or 'none detected'}.",
     ]
     return "\n".join(lines)
 
+
+# Session state init
+for _k, _v in [
+    ("dashboard_df", None),
+    ("scrape_result_text", None),
+]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
 t, main = setup_page("Dashboard")
 
-# Extra CSS specific to dashboard layout
 st.markdown(f"""
 <style>
-/* Give main content area consistent padding */
 .dash-wrap {{ padding: 1rem 1.4rem; }}
-/* Metric row gap control */
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"] {{
     padding: 0 0.3rem !important;
 }}
@@ -69,13 +99,6 @@ st.markdown(f"""
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child {{
     padding-right: 0 !important;
 }}
-/* Prevent nav column from getting inner padding override */
-[data-testid="stAppViewContainer"] > .main
-  [data-testid="stHorizontalBlock"]:first-child
-  > [data-testid="stColumn"]:first-child {{
-    padding: 0 !important;
-}}
-/* Tighten vertical gap between Streamlit elements inside main */
 [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stVerticalBlock"] > div.element-container {{
     margin-bottom: 0 !important;
@@ -86,7 +109,6 @@ st.markdown(f"""
 
 with main:
 
-    # ── Page Header ───────────────────────────────────────────────────────────
     st.markdown(f"""
 <div class="dash-wrap" style="padding-bottom:0.5rem;">
   <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
@@ -105,13 +127,15 @@ with main:
 </div>
 """, unsafe_allow_html=True)
 
-    # ── Metrics Row ───────────────────────────────────────────────────────────
     st.markdown(f'<div class="dash-wrap" style="padding-top:0.6rem;padding-bottom:0.6rem;">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3, gap="small")
     with c1:
         st.metric("Data Accuracy", "—", "ExtractoML")
     with c2:
-        st.metric("Total Rows Extracted", "0", "No jobs yet")
+        _df_check = st.session_state.get("dashboard_df")
+        _row_count = len(_df_check) if _df_check is not None else 0
+        st.metric("Total Rows Extracted", str(_row_count),
+                  "rows loaded" if _row_count > 0 else "No jobs yet")
     with c3:
         st.markdown(f"""
 <div style="background:{t['card']};border:1px solid {t['border']};
@@ -128,12 +152,10 @@ with main:
 """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Main Content: Left (scraper form) + Right (schema/export) ─────────────
     st.markdown(f'<div class="dash-wrap" style="padding-top:0;">', unsafe_allow_html=True)
     lc, rc = st.columns([3, 1], gap="small")
 
     with lc:
-        # New Project card header
         st.markdown(f"""
 <div style="background:{t['card']};border:1px solid {t['border']};
      border-radius:14px;padding:0.75rem 1.1rem 0.5rem;margin-bottom:0.4rem;">
@@ -144,7 +166,6 @@ with main:
 </div>
 """, unsafe_allow_html=True)
 
-        # URL + Category row
         uc, cc = st.columns([3, 1], gap="small")
         with uc:
             url = st.text_input("URL", placeholder="Enter Website URL to Scrape",
@@ -153,167 +174,208 @@ with main:
             st.selectbox("Category", ["E-commerce", "News Articles", "Job Listings", "Custom"],
                          label_visibility="collapsed", key="dash_cat")
 
-        # Format + Buttons row
-        fc, bc, dc = st.columns([1.5, 1, 1], gap="small")
-        with fc:
-            fmt = st.selectbox("Format", ["CSV", "JSON", "Excel"],
-                               label_visibility="collapsed", key="dash_fmt")
-        with bc:
-            start = st.button("▶  Start Scraping", use_container_width=True, key="dash_start")
+        # Form supports Enter key
+        with st.form(key="scrape_form", clear_on_submit=False):
+            query = st.text_input(
+                "What do you want to extract?",
+                placeholder="e.g. Get all product names and prices",
+                key="dash_query_form",
+            )
+            fc, bc, _ = st.columns([1.5, 1, 1], gap="small")
+            with fc:
+                st.selectbox("Format", ["CSV", "JSON", "Excel"],
+                             label_visibility="collapsed", key="dash_fmt")
+            with bc:
+                start = st.form_submit_button("▶  Start Scraping", use_container_width=True)
 
         if start:
             if not url:
                 st.warning("⚠️ Please enter a URL first!")
-                st.stop()
+            elif not query:
+                st.warning("⚠️ Please enter what you want to extract!")
+            else:
+                pb   = st.progress(0)
+                st_t = st.empty()
+                con  = st.empty()
+                lines = []
 
-    # Query input
-    query = st.text_input("What do you want to extract?",
-                          placeholder="e.g. Get all product names and prices",
-                          key="dash_query")
+                def log(msg, pct):
+                    pb.progress(pct)
+                    st_t.markdown(
+                        f'<p style="color:{t["text2"]};font-size:0.82rem;margin:0;">{msg}</p>',
+                        unsafe_allow_html=True)
+                    lines.append(
+                        f'<span style="color:{t["muted"]};">[{time.strftime("%H:%M:%S")}]</span>'
+                        f' <span style="color:{t["green"]};">{msg}</span>')
+                    con.markdown(
+                        f'<div class="CB">{"<br>".join(lines)}</div>',
+                        unsafe_allow_html=True)
 
-    if not query:
-        st.info("👆 Enter what you want to extract, then click Start Scraping again.")
-        st.stop()
+                try:
+                    log("🔍 Validating URL...", 10)
+                    if not validate_url(url):
+                        st.error("❌ Invalid or unreachable URL!")
+                        st.stop()
 
-    pb  = st.progress(0)
-    st_t = st.empty()
-    con  = st.empty()
-    lines = []
+                    log("🚀 Launching Playwright browser...", 20)
+                    playwright, browser = launch_browser()
 
-    def log(msg, pct):
-        pb.progress(pct)
-        st_t.markdown(f'<p style="color:{t["text2"]};font-size:0.82rem;margin:0;">{msg}</p>',
-                      unsafe_allow_html=True)
-        lines.append(f'<span style="color:{t["muted"]};">[{time.strftime("%H:%M:%S")}]</span>'
-                     f' <span style="color:{t["green"]};">{msg}</span>')
-        con.markdown(f'<div class="CB">{"<br>".join(lines)}</div>', unsafe_allow_html=True)
+                    try:
+                        log("🌐 Loading page...", 35)
+                        raw_html = load_page(browser, url)
 
-    try:
-        # Step 1: Validate URL
-        log("🔍 Validating URL...", 10)
-        is_valid = validate_url(url)
-        if not is_valid:
-            st.error("❌ Invalid or unreachable URL!")
-            st.stop()
+                        log("🧹 Cleaning HTML...", 50)
+                        soup = process_html(raw_html)
 
-        # Step 2: Launch browser
-        log("🚀 Launching Playwright browser...", 20)
-        playwright, browser = launch_browser()
+                        log("🌳 Building tag tree...", 60)
+                        tag_tree = build_tag_tree(soup)
 
-        try:
-            # Step 3: Load page
-            log("🌐 Loading page...", 35)
-            raw_html = load_page(browser, url)
+                        log("🤖 AI selecting relevant tags...", 72)
+                        selected_tags = select_relevant_tags(query, tag_tree)
 
-            # Step 4: Process HTML
-            log("🧹 Cleaning HTML...", 50)
-            soup = process_html(raw_html)
+                        log("📦 Extracting content...", 85)
+                        extracted_data = extract_content_by_tags(soup, selected_tags)
 
-            # Step 5: Build tag tree
-            log("🌳 Building tag tree...", 60)
-            tag_tree = build_tag_tree(soup)
+                        log("✨ AI processing final output...", 95)
+                        final_output = process_extracted_data(query, extracted_data)
 
-            # Step 6: LLM tag selection
-            log("🤖 AI selecting relevant tags...", 72)
-            selected_tags = select_relevant_tags(query, tag_tree)
+                        log("✅ Done!", 100)
+                        pb.empty()
+                        st_t.empty()
+                        con.empty()
 
-            # Step 7: Extract content
-            log("📦 Extracting content...", 85)
-            extracted_data = extract_content_by_tags(soup, selected_tags)
+                        # Save to session — NO rerun so data stays visible
+                        if isinstance(extracted_data, list) and len(extracted_data) > 0:
+                            raw_df = pd.DataFrame(extracted_data)
+                            df = clean_dataframe(raw_df)
+                            st.session_state["dashboard_df"] = df
+                            st.session_state["scrape_result_text"] = str(final_output)
 
-            # Step 8: Final LLM processing
-            log("✨ AI processing final output...", 95)
-            final_output = process_extracted_data(query, extracted_data)
+                    finally:
+                        close_browser(playwright, browser)
 
-            log("✅ Done!", 100)
-            pb.empty()
-            st_t.empty()
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
 
-            st.success(f"✅ Scraping complete! Extracted {len(extracted_data)} items.")
-
-            # Show final output
+        # Show scraping result — persists after rerun
+        if st.session_state.get("scrape_result_text"):
+            result_df = st.session_state["dashboard_df"]
+            st.success(f"✅ Scraping complete! {len(result_df)} rows extracted.")
             st.markdown("### 📊 Extracted Data")
-            st.write(final_output)
+            st.write(st.session_state["scrape_result_text"])
 
-            # Save to session for export
-            if isinstance(extracted_data, list) and len(extracted_data) > 0:
-                df = pd.DataFrame(extracted_data)
-                st.session_state["dashboard_df"] = df
+            dl1, dl2, dl3 = st.columns(3, gap="small")
+            with dl1:
+                st.download_button("⬇ CSV", result_df.to_csv(index=False),
+                                   "scraped_data.csv", "text/csv",
+                                   use_container_width=True, key="scrape_dl_csv")
+            with dl2:
+                st.download_button("⬇ JSON", result_df.to_json(orient="records"),
+                                   "scraped_data.json", "application/json",
+                                   use_container_width=True, key="scrape_dl_json")
+            with dl3:
+                st.download_button("⬇ Excel", to_excel(result_df),
+                                   "scraped_data.xlsx",
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   use_container_width=True, key="scrape_dl_excel")
 
-                # Export buttons
-                dl1, dl2, dl3 = st.columns(3, gap="small")
-                with dl1:
-                    st.download_button("⬇ CSV", df.to_csv(index=False),
-                                       "data.csv", "text/csv",
-                                       use_container_width=True)
-                with dl2:
-                    st.download_button("⬇ JSON", df.to_json(orient="records"),
-                                       "data.json", "application/json",
-                                       use_container_width=True)
-                with dl3:
-                    st.download_button("⬇ Excel", to_excel(df),
-                                       "data.xlsx",
-                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                       use_container_width=True)
-
-        finally:
-            close_browser(playwright, browser)
-
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+            if st.button("🗑️ Clear Results", key="clear_results"):
+                st.session_state["scrape_result_text"] = None
+                st.session_state["dashboard_df"] = None
+                st.rerun()
 
     with rc:
-        # Data Schema card — empty until data is loaded
+        rc_df = st.session_state.get("dashboard_df")
+
         st.markdown(f"""
-<div class="C" style="margin-bottom:0.5rem;">
+<div style="background:{t['card']};border:1px solid {t['border']};
+     border-radius:14px;padding:0.85rem 1.1rem;margin-bottom:0.5rem;">
   <div style="font-size:0.84rem;font-weight:700;color:{t['text']};
        margin-bottom:0.5rem;display:flex;align-items:center;gap:6px;">
     {icon('table',12,t['accent'])} Data Schema
   </div>
-  <div style="font-size:0.78rem;color:{t['muted']};text-align:center;padding:1.5rem 0;">
-    No data loaded yet.<br>Run a scrape or upload a file.
-  </div>
+""", unsafe_allow_html=True)
+
+        if rc_df is not None:
+            for col in rc_df.columns:
+                dtype = "Numeric" if pd.api.types.is_numeric_dtype(rc_df[col]) else "Text"
+                clr   = t['blue'] if dtype == "Numeric" else t['purple']
+                st.markdown(f"""
+<div style="display:flex;align-items:center;justify-content:space-between;
+     padding:0.25rem 0;border-bottom:1px solid {t['border']};">
+  <span style="font-size:0.75rem;color:{t['text']};font-weight:500;
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px;">{col}</span>
+  <span style="font-size:0.65rem;color:{clr};font-weight:600;
+       background:rgba(59,130,246,0.1);padding:1px 7px;
+       border-radius:20px;flex-shrink:0;">{dtype}</span>
+</div>
+""", unsafe_allow_html=True)
+            st.markdown(f"""
+<div style="font-size:0.68rem;color:{t['muted']};margin-top:0.5rem;">
+  {rc_df.shape[0]} rows x {rc_df.shape[1]} cols
+</div>
+""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+<div style="font-size:0.78rem;color:{t['muted']};text-align:center;padding:1rem 0;">
+  No data loaded yet.<br>Run a scrape or upload a file.
 </div>
 """, unsafe_allow_html=True)
 
-        # Export Data card
+        st.markdown('</div>', unsafe_allow_html=True)
+
         st.markdown(f"""
-<div class="C">
+<div style="background:{t['card']};border:1px solid {t['border']};
+     border-radius:14px;padding:0.85rem 1.1rem;">
   <div style="font-size:0.84rem;font-weight:700;color:{t['text']};
        margin-bottom:0.6rem;display:flex;align-items:center;gap:6px;">
     {icon('download',12,t['accent'])} Export Data
   </div>
-  <div style="font-size:0.78rem;color:{t['muted']};text-align:center;padding:1rem 0;">
-    Load data first to enable export.
-  </div>
+""", unsafe_allow_html=True)
+
+        if rc_df is not None:
+            st.download_button("⬇ CSV", rc_df.to_csv(index=False),
+                               "export.csv", "text/csv",
+                               use_container_width=True, key="rc_dl_csv")
+            st.download_button("⬇ JSON", rc_df.to_json(orient="records"),
+                               "export.json", "application/json",
+                               use_container_width=True, key="rc_dl_json")
+            st.download_button("⬇ Excel", to_excel(rc_df), "export.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, key="rc_dl_excel")
+        else:
+            st.markdown(f"""
+<div style="font-size:0.78rem;color:{t['muted']};text-align:center;padding:0.75rem 0;">
+  Load data first to enable export.
 </div>
 """, unsafe_allow_html=True)
 
+        st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Upload Section ────────────────────────────────────────────────────────
+    # Upload Section
     st.markdown(f'<div class="dash-wrap" style="padding-top:0.3rem;">', unsafe_allow_html=True)
     st.markdown(f"""
 <div style="background:{t['card']};border:1px solid {t['border']};border-radius:14px;
-     padding:1rem 1.2rem;margin-bottom:0.5rem;">
+     padding:1rem 1.2rem 0.5rem;margin-bottom:0.3rem;">
   <div style="font-size:0.88rem;font-weight:700;color:{t['text']};
        margin-bottom:0.6rem;display:flex;align-items:center;gap:7px;">
     {icon('upload',13,t['accent'])} Upload & Analyze Data
   </div>
+</div>
 """, unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
-        "Drop file here",
+        "Drop file here — CSV, JSON, Excel, Image, PDF",
         type=["csv", "json", "xlsx", "xls", "png", "jpg", "jpeg", "pdf"],
         key="dash_uploader",
-        label_visibility="visible",
-        help="Supports CSV, JSON, Excel, Images, PDF",
     )
 
     if uploaded_file is not None:
         fname = uploaded_file.name
         fsize = uploaded_file.size
-        ext = fname.rsplit(".", 1)[-1].lower()
+        ext   = fname.rsplit(".", 1)[-1].lower()
 
         st.markdown(f"""
 <div style="display:flex;align-items:center;gap:10px;background:{t['bg2']};
@@ -331,13 +393,13 @@ with main:
 
         df = None
         if ext == "csv":
-            try: df = pd.read_csv(uploaded_file)
+            try:   df = pd.read_csv(uploaded_file)
             except Exception as e: st.error(f"CSV parse error: {e}")
         elif ext in ("xlsx", "xls"):
-            try: df = pd.read_excel(uploaded_file, engine="openpyxl")
+            try:   df = pd.read_excel(uploaded_file, engine="openpyxl")
             except Exception as e: st.error(f"Excel parse error: {e}")
         elif ext == "json":
-            try: df = pd.read_json(uploaded_file)
+            try:   df = pd.read_json(uploaded_file)
             except Exception as e: st.error(f"JSON parse error: {e}")
         elif ext in ("png", "jpg", "jpeg"):
             st.image(uploaded_file, caption=fname, width=380)
@@ -346,21 +408,23 @@ with main:
             st.download_button("Download PDF", uploaded_file.read(), fname, "application/pdf")
 
         if df is not None:
+            df = clean_dataframe(df)
             st.markdown(f"""
 <div style="font-size:0.76rem;color:{t['text2']};margin-bottom:0.35rem;">
   Preview — <strong style="color:{t['text']};">{fname}</strong>
-  &nbsp;·&nbsp; {df.shape[0]} rows × {df.shape[1]} columns
+  &nbsp;·&nbsp; {df.shape[0]} rows x {df.shape[1]} columns
 </div>
 """, unsafe_allow_html=True)
             st.dataframe(df.head(5), use_container_width=True, height=185)
             st.session_state["dashboard_df"] = df
 
     st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Data Analysis Canvas ──────────────────────────────────────────────────
+    # Data Analysis Canvas
     canvas_df = st.session_state.get("dashboard_df")
     if canvas_df is not None:
+        canvas_df = clean_dataframe(canvas_df)
+
         st.markdown(f'<div class="dash-wrap" style="padding-top:0.2rem;">', unsafe_allow_html=True)
         st.markdown(f"""
 <div style="background:{t['card']};border:1px solid {t['border']};border-radius:14px;
@@ -369,7 +433,7 @@ with main:
        margin-bottom:0.6rem;display:flex;align-items:center;gap:7px;">
     {icon('bar-chart',13,t['accent'])} Data Analysis Canvas
     <span style="font-size:0.69rem;font-weight:500;color:{t['text2']};margin-left:auto;">
-      {canvas_df.shape[0]} rows × {canvas_df.shape[1]} cols
+      {canvas_df.shape[0]} rows x {canvas_df.shape[1]} cols
     </span>
   </div>
 """, unsafe_allow_html=True)
@@ -381,95 +445,89 @@ with main:
             dl_a, dl_b, dl_c = st.columns(3, gap="small")
             with dl_a:
                 st.download_button("⬇ CSV", canvas_df.to_csv(index=False),
-                                   "export.csv", "text/csv", use_container_width=True)
+                                   "export.csv", "text/csv",
+                                   use_container_width=True, key="tab_csv")
             with dl_b:
                 st.download_button("⬇ JSON", canvas_df.to_json(orient="records"),
-                                   "export.json", "application/json", use_container_width=True)
+                                   "export.json", "application/json",
+                                   use_container_width=True, key="tab_json")
             with dl_c:
                 st.download_button("⬇ Excel", to_excel(canvas_df), "export.xlsx",
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   use_container_width=True)
+                                   use_container_width=True, key="tab_excel")
 
         with tab2:
             all_cols = canvas_df.columns.tolist()
             num_cols = [c for c in all_cols if pd.api.types.is_numeric_dtype(canvas_df[c])]
+
             if len(all_cols) < 2:
                 st.info("Need at least 2 columns for charts.")
+            elif not num_cols:
+                st.info("No numeric columns found. Charts need at least one numeric column.")
             else:
                 ch1, ch2 = st.columns(2, gap="small")
                 with ch1:
                     x_col = st.selectbox("X Axis", all_cols, key="chart_x")
                 with ch2:
-                    y_col = st.selectbox("Y Axis (numeric)", num_cols if num_cols else all_cols,
-                                         index=0, key="chart_y")
-                cdf = canvas_df[[x_col, y_col]].copy()
-                if not pd.api.types.is_numeric_dtype(cdf[y_col]):
-                    cdf[y_col] = pd.to_numeric(cdf[y_col], errors="coerce")
-                cdf = cdf.dropna().set_index(x_col)
-                if cdf.empty:
-                    st.warning("No plottable data with selected columns.")
-                else:
-                    bt1, bt2 = st.tabs(["Bar Chart", "Line Chart"])
-                    with bt1: st.bar_chart(cdf, use_container_width=True)
-                    with bt2: st.line_chart(cdf, use_container_width=True)
+                    y_col = st.selectbox("Y Axis (numeric)", num_cols, key="chart_y")
+
+                try:
+                    cdf = canvas_df[[x_col, y_col]].copy()
+                    cdf[y_col] = pd.to_numeric(
+                        cdf[y_col].astype(str).str.replace(',', '').str.strip(),
+                        errors="coerce"
+                    )
+                    cdf = cdf.dropna(subset=[y_col])
+                    cdf = cdf.set_index(x_col)
+
+                    if cdf.empty:
+                        st.warning("No numeric data found for selected Y column.")
+                    else:
+                        bt1, bt2 = st.tabs(["Bar Chart", "Line Chart"])
+                        with bt1:
+                            st.bar_chart(cdf, use_container_width=True)
+                        with bt2:
+                            st.line_chart(cdf, use_container_width=True)
+
+                except Exception as chart_err:
+                    st.error(f"Chart error: {chart_err}")
 
         with tab3:
-            with st.spinner("Generating AI analysis…"):
-                time.sleep(0.25)
-                analysis_text = gen_ai_analysis(canvas_df)
-            st.markdown(f"""
+            try:
+                with st.spinner("Generating AI analysis..."):
+                    time.sleep(0.1)
+                    analysis_text = gen_ai_analysis(canvas_df)
+                st.markdown(f"""
 <div style="background:{t['bg2']};border:1px solid {t['border']};border-radius:10px;
      padding:0.9rem 1.1rem;font-family:'JetBrains Mono',monospace;font-size:0.76rem;
      color:{t['text2']};line-height:1.85;white-space:pre-wrap;
-     max-height:280px;overflow-y:auto;margin-bottom:0.5rem;">
+     max-height:300px;overflow-y:auto;margin-bottom:0.5rem;">
 {analysis_text}
 </div>
 """, unsafe_allow_html=True)
-            st.download_button("⬇ Download Analysis (.txt)", analysis_text,
-                               "ai_analysis.txt", "text/plain")
+                st.download_button("⬇ Download Analysis (.txt)", analysis_text,
+                                   "ai_analysis.txt", "text/plain",
+                                   use_container_width=True, key="dl_analysis")
+            except Exception as e:
+                st.error(f"Analysis error: {e}")
 
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Recent Jobs Table ─────────────────────────────────────────────────────
+    # Recent Jobs
     st.markdown(f'<div class="dash-wrap" style="padding-top:0.2rem;">', unsafe_allow_html=True)
-
     jobs = st.session_state.get("recent_jobs", [])
-
     th_s = (f"text-align:left;padding:0.45rem 0.75rem;font-size:0.65rem;font-weight:700;"
             f"color:{t['muted']};text-transform:uppercase;letter-spacing:0.07em;"
             f"border-bottom:1px solid {t['border']};")
     th_html = "".join(f'<th style="{th_s}">{h}</th>'
                       for h in ["URL", "Category", "Rows", "Accuracy", "Status", "Time"])
-
-    if jobs:
-        bm = {"G": (t['accent_glow'], t['green']),
-              "A": (t['accent_glow'],          t['accent']),
-              "P": ("rgba(139,92,246,0.14)",   t['purple'])}
-        cm = {"E-commerce": ("rgba(59,130,246,0.14)", t['blue']),
-              "News":        ("rgba(139,92,246,0.14)", t['purple']),
-              "Jobs":        (t['accent_glow'],        t['accent'])}
-        td_s = f"padding:0.6rem 0.75rem;border-bottom:1px solid {t['border']};"
-        rows_html = ""
-        for u, cat, rn, acc, col, stat, dur in jobs:
-            bg, fg = bm.get(col, bm["G"])
-            cbg, cfg = cm.get(cat, bm["G"])
-            rows_html += (
-                f'<tr>'
-                f'<td style="{td_s}font-family:monospace;font-size:0.7rem;color:{t["text"]};">{u}</td>'
-                f'<td style="{td_s}"><span style="background:{cbg};color:{cfg};padding:2px 7px;border-radius:20px;font-size:0.67rem;font-weight:600;">{cat}</span></td>'
-                f'<td style="{td_s}color:{t["text"]};font-weight:600;font-size:0.82rem;">{rn}</td>'
-                f'<td style="{td_s}color:{t["text2"]};font-size:0.82rem;">{acc}</td>'
-                f'<td style="{td_s}"><span style="background:{bg};color:{fg};padding:2px 7px;border-radius:20px;font-size:0.67rem;font-weight:600;">{stat}</span></td>'
-                f'<td style="{td_s}color:{t["text2"]};font-size:0.82rem;">{dur}</td>'
-                f'</tr>'
-            )
-        body_html = rows_html
-    else:
-        body_html = f'<tr><td colspan="6" style="text-align:center;padding:2.5rem;color:{t["muted"]};font-size:0.83rem;">No scraping jobs yet. Start a new project above.</td></tr>'
-
+    body_html = (f'<tr><td colspan="6" style="text-align:center;padding:2.5rem;'
+                 f'color:{t["muted"]};font-size:0.83rem;">'
+                 f'No scraping jobs yet. Start a new project above.</td></tr>')
     st.markdown(f"""
-<div class="C" style="overflow-x:auto;margin-bottom:1.2rem;">
+<div style="background:{t['card']};border:1px solid {t['border']};border-radius:14px;
+     padding:1rem 1.2rem;overflow-x:auto;margin-bottom:1.2rem;">
   <div style="font-size:0.88rem;font-weight:700;color:{t['text']};
        margin-bottom:0.65rem;display:flex;align-items:center;gap:7px;">
     {icon('list-checks',13,t['accent'])} Recent Scraping Jobs

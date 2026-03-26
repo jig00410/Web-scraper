@@ -200,13 +200,13 @@ with left_col:
     st.markdown(f"""
     <div style="background:{t['card']};border:1px solid {t['border']};
          border-top:none;border-radius:0 0 20px 20px;
-         padding:0.25rem 2.5rem 1.75rem;text-align:center;">
-      <a href="#" style="font-size:0.8rem;color:{t['accent']};
-         text-decoration:none;display:block;margin-bottom:1rem;">
-        Forgot Your Password?
-      </a>
+         padding:0.25rem 2.5rem 0.5rem;text-align:center;">
     </div>
     """, unsafe_allow_html=True)
+
+    # Button logic for switching page
+    if st.button("Forgot Your Password?", key="forgot_pw", type="secondary"):
+        st.switch_page("pages/0_Forgot_Password.py")
 
     st.markdown('<div class="signin-btn">', unsafe_allow_html=True)
     if st.button("SIGN IN", key="signin_btn", use_container_width=True):
