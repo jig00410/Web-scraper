@@ -138,7 +138,7 @@ with main:
   </div>
 """, unsafe_allow_html=True)
 
-        if st.button("＋  New Chat", key="new_chat_btn", use_container_width=True):
+        if st.button("New Chat", key="new_chat_btn", use_container_width=True):
             _new_session()
             st.rerun()
 
