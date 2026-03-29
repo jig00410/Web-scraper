@@ -6,7 +6,6 @@ build-backend = "setuptools.build_meta"
 name = "web-scrape"
 version = "0.1.0"
 description = "Web scraping pipeline using Playwright"
-dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
